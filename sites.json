@@ -1,0 +1,12 @@
+[
+  {
+    "name": "khaosod",
+    "list_urls": ["https://www.khaosod.co.th/home"],
+    "article_pattern": "/news_\\d+$",
+    "id_pattern": "news_(\\d+)$",
+    "content_selector": "[itemprop=\"articleBody\"]",
+    "category_segment": 0,
+    "title_suffix": " - ข่าวสด",
+    "render": false
+  }
+]

@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,7 @@ class NewsConfig:
     user_agent: str = os.getenv(
         "USER_AGENT", "MiniDataCollector/1.0 (+contact: you@example.com)"
     )
+    max_articles_per_round: int = int(os.getenv("NEWS_MAX_ARTICLES", "40"))
 
 
 # ---------- 6) ค่าตั้งของการแจ้งเตือน ----------
@@ -49,3 +51,20 @@ class AlertConfig:
     telegram_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     cooldown_minutes: int = int(os.getenv("ALERT_COOLDOWN_MIN", "30"))
+
+# ---------- เว็บข่าว ----------
+@dataclass
+class NewsSite:
+    name: str                            # ชื่อสั้น ใช้ตั้งชื่อโฟลเดอร์และไฟล์ state
+    list_urls: list[str]                 # หน้ารายการข่าว (มีได้หลายหน้า)
+    article_pattern: str                 # regex แยกลิงก์ข่าวออกจากลิงก์อื่น
+    id_pattern: str                      # regex ดึงเลขข่าวจาก URL (group 1)
+    title_suffix: str = ""             # ข้อความท้ายหัวข้อที่ต้องตัด เช่น " - ข่าวสด"
+    content_selector: str = ""           # CSS selector ของเนื้อหาข่าว (ว่าง = เดาเอง)
+    category_segment: int | None = None  # path segment ที่เป็นหมวด (ทางสำรอง)
+    render: bool = False                 # True = ใช้ Playwright (บทที่ 7)
+
+
+def load_sites(path: Path | None = None) -> list[NewsSite]:
+    path = path or Path(os.getenv("NEWS_SITES_FILE", ROOT / "sites.json"))
+    return [NewsSite(**s) for s in json.loads(path.read_text(encoding="utf-8"))]
