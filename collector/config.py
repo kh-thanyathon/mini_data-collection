@@ -1,4 +1,3 @@
-"""ค่าตั้งทั้งหมดของระบบ อ่านจาก .env ที่เดียว"""
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
