@@ -86,7 +86,7 @@ class GiveUp(Exception):
 class HttpClient:
     def __init__(self, limiter: DomainRateLimiter, stats: RequestStats, user_agent: str,
                  max_retries: int = 4, timeout: float = 20, max_wait: float = 120,
-                 session=None, sleep=time.sleep):
+                 session=None, sleep=time.sleep, classify=None):
         self.limiter = limiter
         self.stats = stats
         self.max_retries = max_retries
@@ -95,6 +95,7 @@ class HttpClient:
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = user_agent
         self.sleep = sleep
+        self.classify = classify
 
     def get(self, url: str, **kwargs) -> requests.Response:
         domain = urlparse(url).netloc
@@ -111,6 +112,19 @@ class HttpClient:
                 self.sleep(backoff_delay(attempt))
                 continue
 
+            elapsed = time.monotonic() - t0
+            if self.classify:
+                verdict = self.classify(resp)
+                if verdict is not None:
+                    ok, retry, note = verdict
+                    self.stats.add(domain, resp.status_code, ok, elapsed, note)
+                    if ok:
+                        return resp                       # เช่น commentsDisabled
+                    if not retry or attempt == self.max_retries:
+                        raise GiveUp(f"{note} {url}", resp)   # เช่น quotaExceeded
+                    self.sleep(backoff_delay(attempt))    # เช่น rateLimitExceeded
+                    continue
+            
             ok = resp.status_code < 400
             self.stats.add(domain, resp.status_code, ok, time.monotonic() - t0)   # 3) นับ
             if ok:

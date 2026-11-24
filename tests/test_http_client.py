@@ -83,3 +83,12 @@ def test_parse_retry_after():
     assert parse_retry_after("12") == 12
     assert parse_retry_after(None) is None
     assert parse_retry_after("ขยะ") is None
+
+
+def test_classify_hook_turns_403_into_success():
+    session = FakeSession([FakeResp(403)])
+    stats = RequestStats()
+    c = HttpClient(DomainRateLimiter(600, sleep=lambda s: None), stats, "t",
+                   session=session, classify=lambda r: (True, False, "commentsDisabled"))
+    assert c.get("https://a.com/x").status_code == 403    # คืน response ไม่ raise
+    assert stats.summary()["success"] == 1                # นับเป็นสำเร็จ
