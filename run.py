@@ -140,7 +140,7 @@ def scheduler() -> None:
             for j in jobs:
                 j.tick()
             # heartbeat: ให้ Docker healthcheck รู้ว่า scheduler ยังไม่ค้าง
-            atomic_write_json(STATE_DIR / "heartbeat.json", {
+            atomic_write_json(HEARTBEAT,  "heartbeat.json", {
                 "at": now().isoformat(timespec="seconds"),
                 "jobs": {j.name: {"rounds": j.rounds, "skipped": j.skipped,
                                   "crashes": j.crashes, "running": j.running.locked()} for j in jobs}})
