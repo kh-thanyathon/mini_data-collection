@@ -39,7 +39,9 @@ class Alerter:
             return False
         try:
             r = requests.post(f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage",
-                              data={"chat_id": self.cfg.telegram_chat_id, "text": text}, timeout=10)
+                              data={"chat_id": self.cfg.telegram_chat_id, "text": text,
+                                    "link_preview_options": '{"is_disabled": true}'},
+                              timeout=10)
             return r.ok
         except requests.RequestException as e:          # แจ้งเตือนพัง ต้องไม่ทำให้บอทพัง
             log.error("ส่ง Telegram ไม่สำเร็จ: %s", type(e).__name__)

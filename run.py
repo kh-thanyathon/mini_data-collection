@@ -5,6 +5,7 @@
     python run.py news         # รันข่าว 1 รอบ (ทุกเว็บ)
     python run.py test-alert   # ส่งข้อความทดสอบเข้า Telegram
 """
+import json
 import logging
 import signal
 import sys
@@ -16,7 +17,7 @@ from logging.handlers import RotatingFileHandler
 from collector.alerts import Alerter
 from collector.config import LOG_DIR, STATE_DIR, NewsConfig, YouTubeConfig, load_sites
 from collector.storage import atomic_write_json
-from collector.timeutil import now
+from collector.timeutil import now, parse_iso
 
 log = logging.getLogger("run")
 
@@ -109,8 +110,24 @@ def build_jobs(alerter: Alerter) -> list[Job]:
         jobs.append(Job(f"news/{site.name}", nc.run_round, news_cfg.interval_minutes, alerter))
     return jobs
 
+HEARTBEAT = STATE_DIR / "heartbeat.json"
+
+
+def another_instance_running(path=HEARTBEAT, max_age_s: int = 20) -> bool:
+    """heartbeat ถูกเขียนทุก 5 วินาที ถ้าไฟล์อายุไม่ถึง 20 วินาที แปลว่ามี scheduler อีกตัวรันอยู่
+    (ใช้ได้ข้ามเครื่องกับ container ด้วย เพราะ state/ ถูก mount เป็นโฟลเดอร์เดียวกัน)"""
+    if not path.exists():
+        return False
+    try:
+        at = parse_iso(json.loads(path.read_text(encoding="utf-8")).get("at"))
+    except (ValueError, OSError):
+        return False
+    return at is not None and (now() - at).total_seconds() < max_age_s
 
 def scheduler() -> None:
+    if another_instance_running():
+        log.error("มี scheduler อีกตัวรันอยู่ (heartbeat ยังสด) -> ไม่เริ่มซ้อน")
+        sys.exit(1)
     alerter = Alerter()
     jobs = build_jobs(alerter)
     stop = threading.Event()

@@ -1,0 +1,11 @@
+.venv/
+.env
+.git/
+data/
+state/
+logs/
+reports/
+docs/
+__pycache__/
+.pytest_cache/
+try_*.py

@@ -73,3 +73,18 @@ def test_crash_is_caught_alerted_and_recovers():
     t[0] = 300
     job.tick(); wait_idle(job)
     assert job.rounds == 1 and "j:crash" in alerter.resolved
+
+def test_another_instance_detection(tmp_path):
+    import json
+    from datetime import timedelta
+
+    from collector.timeutil import now
+    from run import another_instance_running
+
+    hb = tmp_path / "heartbeat.json"
+    assert another_instance_running(hb) is False                      # ยังไม่เคยรัน
+    hb.write_text(json.dumps({"at": now().isoformat()}), encoding="utf-8")
+    assert another_instance_running(hb) is True                       # อีกตัวเพิ่งเขียน
+    old = (now() - timedelta(minutes=5)).isoformat()
+    hb.write_text(json.dumps({"at": old}), encoding="utf-8")
+    assert another_instance_running(hb) is False                      # ตัวเก่าตายไปแล้ว

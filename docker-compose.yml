@@ -1,0 +1,19 @@
+services:
+  collector:
+    build: .
+    container_name: mini-collector
+    env_file: .env                 # ส่ง secret ตอนรัน ไม่ฝังใน image
+    restart: unless-stopped        # process ตาย -> Docker ปลุกขึ้นใหม่เอง
+    init: true                     # เก็บกวาด process ของ Chromium ที่ค้าง
+    shm_size: "1gb"                # Chromium ใช้ /dev/shm เยอะ ค่าเริ่มต้น 64MB จะทำให้หน้าเว็บ crash
+    volumes:                       # ข้อมูลอยู่นอก container -> rebuild แล้วไม่หาย
+      - ./data:/app/data
+      - ./state:/app/state
+      - ./logs:/app/logs
+    healthcheck:                   # heartbeat เก่ากว่า 2 นาที = scheduler ค้าง
+      test: ["CMD", "python", "-c",
+             "import json,sys,datetime as d; t=d.datetime.fromisoformat(json.load(open('/app/state/heartbeat.json'))['at']); sys.exit((d.datetime.now(t.tzinfo)-t).total_seconds()>120)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
