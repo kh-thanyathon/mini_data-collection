@@ -12,6 +12,9 @@ from .http_client import DomainRateLimiter, GiveUp, HttpClient, RequestStats
 from .storage import SeenStore, append_jsonl, atomic_write_json, load_json, round_id
 from .timeutil import LOCAL_TZ, iso, latency_minutes, now, parse_iso
 
+from .roundlog import finish_round
+
+
 MAX_FAILS = 3          # หน้าข่าวที่ parse ไม่ได้ 3 รอบติด -> เลิกลอง
 ARTICLE_TYPES = {"NewsArticle", "Article", "ReportageNewsArticle"}
 
@@ -258,7 +261,7 @@ class PlaywrightFetcher:
 class NewsCollector:
     def __init__(self, cfg: NewsConfig | None = None, sites: list[NewsSite] | None = None,
                  client: HttpClient | None = None, fetcher=None,
-                 state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR):
+                 state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR, log_dir: Path | None = None):
         self.cfg = cfg or NewsConfig()
         self.sites = sites if sites is not None else load_sites()
         self.limiter = DomainRateLimiter(self.cfg.max_req_per_min)
@@ -267,6 +270,7 @@ class NewsCollector:
         self.client = client or HttpClient(self.limiter, self.stats, self.cfg.user_agent)
         self.fetcher = fetcher                     # สร้างเมื่อจำเป็นเท่านั้น (เปิดเบราว์เซอร์ใช้ RAM เยอะ)
         self.state_dir, self.data_dir = state_dir, data_dir
+        self.log_dir = log_dir or state_dir.parent / "logs"
 
     def _browser(self):
         if self.fetcher is None:
@@ -313,10 +317,13 @@ class NewsCollector:
                    "listing_not_modified": 0, "new_links": 0, "saved": 0,
                    "backfill": 0, "failed": 0, "errors": [], "latency_min": []}
 
+        n0 = len(self.stats.records)  # request ก่อนหน้านี้เป็นของรอบอื่น
         seen = SeenStore(self.state_dir / f"news_seen_{site.name}.json", ttl_days=14)
         fails_path = self.state_dir / f"news_fails_{site.name}.json"
         fails: dict[str, int] = load_json(fails_path, {})
         baseline_path = self.state_dir / f"news_baseline_{site.name}.json"
+        first_seen_path = self.state_dir / f"news_first_seen_{site.name}.json"
+        first_seen: dict[str, str] = load_json(first_seen_path, {})
 
         try:
             # 1) รวมลิงก์จากทุกหน้ารายการ กันซ้ำด้วยเลขข่าว
@@ -327,6 +334,11 @@ class NewsCollector:
                     if aid and aid not in by_id:
                         by_id[aid] = link
             summary["listing_links"] = len(by_id)
+                        # จดเวลาที่ "เห็นลิงก์บนหน้ารายการครั้งแรก" -> แยก latency เป็นส่วนของเว็บ vs ส่วนของเรา
+            seen_now = iso(now())
+            for aid in by_id:
+                if aid not in seen:
+                    first_seen.setdefault(aid, seen_now)
 
             # 2) รอบแรกสุด: จำว่าข่าวที่ค้างอยู่บนหน้าตอนนั้นเป็นข่าวเก่า (backfill)
             if baseline_path.exists():
@@ -359,6 +371,7 @@ class NewsCollector:
                 rec["collected_at"] = iso(now())
                 rec["round_id"] = rid
                 rec["backfill"] = aid in baseline
+                rec["first_seen_at"] = first_seen.get(aid, rec["collected_at"])
                 records.append(rec)
 
             # 4) เขียนไฟล์ก่อน แล้วค่อยจำ
@@ -378,10 +391,15 @@ class NewsCollector:
         finally:
             seen.save()
             atomic_write_json(fails_path, fails)
+                        # เหลือไว้เฉพาะข่าวที่ยังไม่ได้เก็บ (ข่าวที่เลิกลองแล้วก็ลบทิ้ง ไฟล์จะได้ไม่โต)
+            atomic_write_json(first_seen_path, {k: v for k, v in first_seen.items() if k not in seen})
 
         summary["duration_s"] = round((now() - started).total_seconds(), 1)
+        finish_round(f"news/{site.name}", started, summary, self.stats.records[n0:],
+                     self.cfg.interval_minutes, 15, self.log_dir)
         return summary
 
+    
     def _fail(self, aid: str, fails: dict, seen: SeenStore, summary: dict) -> None:
         summary["failed"] += 1
         fails[aid] = fails.get(aid, 0) + 1

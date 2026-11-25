@@ -1,9 +1,9 @@
 import os
 from .timeutil import now
 def round_id(dt=None) -> str:
-    """เช่น 2026-11-24_185200_12345"""
+    """เช่น 2026-11-25_130512345_12345 (วันที่_เวลาถึงมิลลิวินาที_pid)"""
     dt = dt or now()
-    return f"{dt:%Y-%m-%d_%H%M%S}_{os.getpid()}"
+    return f"{dt:%Y-%m-%d_%H%M%S}{dt.microsecond // 1000:03d}_{os.getpid()}"
 
 import json
 from pathlib import Path

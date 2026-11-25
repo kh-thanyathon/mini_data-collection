@@ -168,3 +168,29 @@ def test_content_selector_and_stop_marker():
     <p>ข่าวแนะนำอื่นนอกกล่องเนื้อหาที่ยาวพอสมควร</p></body></html>"""
     r = parse_article(html, "https://n.com/news/content/1", site)
     assert r["content"] == "ย่อหน้าเนื้อข่าวจริงที่ยาวพอจะนับเป็นเนื้อหา"
+
+def test_each_round_writes_its_own_log(tmp_path):
+    nc, fake = make(tmp_path)
+    nc.run_site(SITE)
+    fake.ids, fake.etag = [3, 1, 2], "v2"
+    nc.run_site(SITE)
+    logs = sorted((tmp_path / "logs" / "news" / "t").glob("*.json"))
+    assert len(logs) == 2
+    second = json.loads(logs[1].read_text(encoding="utf-8"))
+    assert second["items"]["saved"] == 1
+    assert second["freshness"]["n"] == 1
+
+def test_first_seen_at_recorded_even_if_collected_later(tmp_path):
+    fake = FakeSite()
+    fake.ids = [1, 2, 3]
+    nc = NewsCollector(NewsConfig(max_articles_per_round=1), [SITE], fake,
+                       state_dir=tmp_path / "s", data_dir=tmp_path / "d")
+    nc.run_site(SITE)
+    fake.etag = "v2"
+    nc.run_site(SITE)
+    rows = [json.loads(x) for x in next((tmp_path / "d" / "news" / "t").glob("*.jsonl"))
+            .read_text(encoding="utf-8").splitlines()]
+    first, second = rows
+    assert first["first_seen_at"] <= first["collected_at"]
+    # ข่าวที่ 2 ถูกเห็นตั้งแต่รอบแรก แต่เก็บได้รอบสอง -> first_seen_at คือเวลาของรอบแรก
+    assert second["first_seen_at"] <= first["collected_at"] <= second["collected_at"]

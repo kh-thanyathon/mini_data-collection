@@ -8,6 +8,7 @@ from .config import DATA_DIR, STATE_DIR, YouTubeConfig
 from .storage import (SeenStore, append_jsonl, atomic_write_json, load_json,
                       round_id)
 from .timeutil import iso, latency_minutes, now, parse_iso, to_utc_rfc3339
+from .roundlog import finish_round
 
 API = "https://www.googleapis.com/youtube/v3"
 COST = {"search": 100, "videos": 1, "commentThreads": 1}
@@ -72,7 +73,7 @@ def _int(v):
 
 class YouTubeCollector:
     def __init__(self, cfg: YouTubeConfig | None = None, client: HttpClient | None = None,
-                 state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR):
+                 state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR, log_dir: Path | None = None):
         self.seen_comments = SeenStore(state_dir / "yt_seen_comments.json", ttl_days=7)
         self.tracked_path = state_dir / "yt_tracked.json"
         self.tracked: dict[str, str] = load_json(self.tracked_path, {})  # video_id -> published_at
@@ -84,6 +85,7 @@ class YouTubeCollector:
                                            "MiniDataCollector/1.0",
                                            classify=classify_youtube)
         self.data_dir = data_dir
+        self.log_dir = log_dir or state_dir.parent / "logs"
         self.quota = QuotaGuard(self.cfg.daily_quota_budget, state_dir / "yt_quota.json")
         self.seen = SeenStore(state_dir / "yt_seen_videos.json", ttl_days=7)
         self.last_run_path = state_dir / "yt_last_run.json"
@@ -259,6 +261,8 @@ class YouTubeCollector:
         out_dir = self.data_dir / "youtube" / rid
         self.round_spent = 0
         found, summary = [], {"round_id": rid, "errors": []}
+        req_stats = getattr(self.client, "stats", None)  # FakeClient ใน test ไม่มี stats
+        n0 = len(req_stats.records) if req_stats else 0  # request ก่อนหน้านี้เป็นของรอบอื่น
 
         try:
             last = parse_iso(load_json(self.last_run_path, {}).get("started_at"))
@@ -299,6 +303,10 @@ class YouTubeCollector:
                if x is not None]
         summary.update(quota_this_round=self.round_spent, quota_today=self.quota.used(),
                        pages_skipped_for_budget=self.pages_skipped, latency_min=sorted(lat))
+
+        finish_round("youtube", started, summary, req_stats.records[n0:] if req_stats else [],
+                     self.cfg.interval_minutes, 60, self.log_dir)
+        
         return summary
 
 
