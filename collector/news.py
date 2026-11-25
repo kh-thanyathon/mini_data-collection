@@ -1,5 +1,6 @@
 import json
 import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -25,7 +26,6 @@ def normalize_url(href: str, base: str) -> str:
 
 
 def extract_links(html: str, base: str, pattern: str) -> list[str]:
-    """ดึงลิงก์ข่าวจากหน้ารายการ เรียงตามลำดับที่เจอ ไม่ซ้ำ"""
     rx = re.compile(pattern)
     out, seen = [], set()
     for a in BeautifulSoup(html, "lxml").select("a[href]"):
@@ -37,10 +37,32 @@ def extract_links(html: str, base: str, pattern: str) -> list[str]:
 
 
 def article_id(url: str, id_pattern: str) -> str | None:
-    """เลขข่าวจาก URL — ใช้เป็น key กันซ้ำ (ข่าวเดียวกันอาจมีหลาย path)"""
     m = re.search(id_pattern, url)
     return m.group(1) if m else None
 
+def same_site(netloc: str, domain: str) -> bool:
+    """www.thaipbs.or.th, static.thaipbs.or.th ถือเป็นเว็บเดียวกับ thaipbs.or.th"""
+    base = domain.lower().removeprefix("www.")
+    netloc = netloc.lower()
+    return netloc == base or netloc.endswith("." + base)
+
+def is_allowed(url: str, blocked_paths: list[str]) -> bool:
+    """เคารพ robots.txt: path ที่ขึ้นต้นด้วยค่าใน Disallow ห้ามเข้า"""
+    path = urlparse(url).path
+    return not any(path.startswith(p) for p in blocked_paths)
+
+BLOCK_TYPES = {"image", "media", "font", "stylesheet"}   # ไม่จำเป็นต่อการอ่านลิงก์และเนื้อหา
+
+def block_reason(url: str, resource_type: str, site_domain: str,
+                 blocked_paths: list[str]) -> str | None:
+    """Playwright: ตัดสินว่า request นี้ควรบล็อกไหม คืนเหตุผล หรือ None = ปล่อยผ่าน"""
+    if resource_type in BLOCK_TYPES:
+        return "resource_type"
+    if not same_site(urlparse(url).netloc, site_domain):
+        return "third_party"            # โฆษณา, analytics ฯลฯ ไม่เกี่ยวกับข้อมูลที่เราต้องการ
+    if not is_allowed(url, blocked_paths):
+        return "robots"
+    return None
 
 def parse_published(value) -> datetime | None:
     """รับได้ทั้ง ISO 8601 และ Unix epoch (วินาทีหรือมิลลิวินาที) คืนเป็นเวลาไทย"""
@@ -153,8 +175,14 @@ def parse_article(html: str, url: str, site: NewsSite) -> dict:
     if not content:
         box = (soup.select_one(site.content_selector) if site.content_selector else None) \
               or soup.find("article") or soup
-        paras = [p.get_text(" ", strip=True) for p in box.find_all("p")]
-        content = "\n".join(p for p in paras if len(p) > 20)
+        paras = []
+        for p in box.find_all("p"):
+            text = p.get_text(" ", strip=True)
+            if any(text.startswith(stop) for stop in site.content_stop):
+                break                            # ต่อจากนี้เป็นลิงก์ข่าวอื่น ไม่ใช่เนื้อข่าว
+            if len(text) > 20:
+                paras.append(text)
+        content = "\n".join(paras)
 
     return {
         "site": site.name,
@@ -172,19 +200,90 @@ def parse_article(html: str, url: str, site: NewsSite) -> dict:
 # ======================================================================
 # 2) ส่วนที่ต่อเน็ต
 # ======================================================================
+class PlaywrightFetcher:
+    def __init__(self, limiter: DomainRateLimiter, stats: RequestStats, user_agent: str,
+                 profile_dir: Path):
+        from playwright.sync_api import sync_playwright      # import ตอนใช้จริง: เว็บ static ไม่ต้องโหลด
+        self.limiter, self.stats = limiter, stats
+        self.blocked: Counter = Counter()
+        self._pw = sync_playwright().start()
+        self.ctx = self._pw.chromium.launch_persistent_context(
+            str(profile_dir), headless=True, user_agent=user_agent)
+
+    def fetch(self, url: str, site: NewsSite) -> str:
+        domain = urlparse(url).netloc
+        self.limiter.wait(domain)                 # นับเป็น 1 คิวของ rate limit เหมือน requests
+        page = self.ctx.new_page()
+        aborted = set()
+        sent = [0]                               # จำนวน request ที่เบราว์เซอร์ส่งออกไปจริง (นับเฉพาะ same-site)
+
+        def route(r):
+            reason = block_reason(r.request.url, r.request.resource_type, domain, site.blocked_paths)
+            if reason:
+                self.blocked[reason] += 1
+                aborted.add(id(r.request))
+                return r.abort()
+            return r.continue_()
+
+        def done(req, ok):
+            if id(req) in aborted:
+                return                             # ถูกบล็อก = ไม่ได้ออกจากเครื่อง ไม่นับ
+            if same_site(urlparse(req.url).netloc, domain):
+                sent[0] += 1
+                self.stats.add(domain, None, ok, 0, f"pw:{req.resource_type}")
+
+        page.route("**/*", route)
+        page.on("requestfinished", lambda req: done(req, True))
+        page.on("requestfailed", lambda req: done(req, False))
+        try:
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            if resp is None or resp.status >= 400:
+                raise GiveUp(f"HTTP {resp.status if resp else '?'} {url}")
+            for _ in range(site.scrolls):          # infinite scroll: เลื่อนลงแล้วรอโหลดเพิ่ม
+                page.mouse.wheel(0, 4000)
+                page.wait_for_timeout(1500)
+            return page.content()
+        except GiveUp:
+            raise
+        except Exception as e:                     # timeout ฯลฯ -> ให้ผู้เรียกจัดการแบบเดียวกับ requests
+            raise GiveUp(f"playwright {type(e).__name__}: {url}") from e
+        finally:
+            page.close()
+            self.limiter.charge(domain, sent[0] - 1)
+
+    def close(self) -> None:
+        self.ctx.close()
+        self._pw.stop()
+
 class NewsCollector:
     def __init__(self, cfg: NewsConfig | None = None, sites: list[NewsSite] | None = None,
-                 client: HttpClient | None = None,
+                 client: HttpClient | None = None, fetcher=None,
                  state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR):
         self.cfg = cfg or NewsConfig()
         self.sites = sites if sites is not None else load_sites()
-        self.client = client or HttpClient(DomainRateLimiter(self.cfg.max_req_per_min),
-                                           RequestStats(), self.cfg.user_agent)
+        self.limiter = DomainRateLimiter(self.cfg.max_req_per_min)
+        self.stats = RequestStats()
+        # requests และ Playwright ใช้ limiter/stats ตัวเดียวกัน -> คุมภาระต่อโดเมนรวมกันจริง
+        self.client = client or HttpClient(self.limiter, self.stats, self.cfg.user_agent)
+        self.fetcher = fetcher                     # สร้างเมื่อจำเป็นเท่านั้น (เปิดเบราว์เซอร์ใช้ RAM เยอะ)
         self.state_dir, self.data_dir = state_dir, data_dir
+
+    def _browser(self):
+        if self.fetcher is None:
+            self.fetcher = PlaywrightFetcher(self.limiter, self.stats, self.cfg.user_agent,
+                                             self.state_dir / "pw_profile")
+        return self.fetcher
+
+    def close(self) -> None:
+        if self.fetcher is not None:
+            self.fetcher.close()
+            self.fetcher = None
 
     # ---------- หน้ารายการ ----------
     def fetch_listing(self, site: NewsSite, url: str, summary: dict) -> list[str]:
-        """โหลดหน้ารายการแบบ conditional GET: ถ้าหน้าไม่เปลี่ยน เว็บตอบ 304 ไม่ส่งเนื้อหา"""
+        if site.render:
+            html = self._browser().fetch(url, site)
+            return extract_links(html, url, site.article_pattern)
         cache_path = self.state_dir / f"news_http_cache_{site.name}.json"
         cache = load_json(cache_path, {})
         entry = cache.get(url, {})
@@ -237,15 +336,18 @@ class NewsCollector:
                 atomic_write_json(baseline_path, sorted(baseline))
 
             # 3) โหลดเฉพาะข่าวที่ยังไม่เคยเก็บ
-            new = [(aid, link) for aid, link in by_id.items() if aid not in seen]
+            new = [(aid, link) for aid, link in by_id.items()
+                   if aid not in seen and is_allowed(link, site.blocked_paths)]
             summary["new_links"] = len(new)
             # จำกัดต่อรอบ ให้รอบจบก่อนรอบถัดไป (40 ข่าว x 5 วิ = 200 วิ < 300 วิ) ที่เหลือไปรอบหน้า
             new = new[: self.cfg.max_articles_per_round]
-
+            
             records = []
             for aid, link in new:
                 try:
                     rec = parse_article(self.client.get(link).text, link, site)
+                    if site.render and not (rec["title"] and rec["published_at"]):
+                        rec = parse_article(self._browser().fetch(link, site), link, site)
                 except GiveUp as e:
                     summary["errors"].append(str(e)[:200])
                     self._fail(aid, fails, seen, summary)
@@ -288,22 +390,41 @@ class NewsCollector:
             fails.pop(aid)
 
     def run_round(self) -> list[dict]:
-        """ทุกเว็บในรอบเดียว — เว็บหนึ่งพังไม่กระทบเว็บอื่น"""
         results = []
-        for site in self.sites:
-            if site.render:
-                continue                      # เว็บที่ต้องใช้ Playwright รอ บทที่ 7
-            try:
-                results.append(self.run_site(site))
-            except Exception as e:            # noqa: BLE001 — กันบอทตายทั้งตัวเพราะเว็บเดียว
-                results.append({"site": site.name, "errors": [f"{type(e).__name__}: {e}"],
-                                "latency_min": []})
+        try:
+            for site in self.sites:
+                try:
+                    results.append(self.run_site(site))
+                except Exception as e:        # noqa: BLE001 — กันบอทตายทั้งตัวเพราะเว็บเดียว
+                    results.append({"site": site.name, "errors": [f"{type(e).__name__}: {e}"],
+                                    "latency_min": []})
+        finally:
+            self.close()                      # ปิดเบราว์เซอร์ทุกครั้ง แม้จะมี error
         return results
 
 
 if __name__ == "__main__":
-    for s in NewsCollector().run_round():
+    import sys
+    from collections import defaultdict
+
+    nc = NewsCollector()
+    only = sys.argv[1:]                       # python -m collector.news thaipbs  (รันเฉพาะเว็บ)
+    if only:
+        nc.sites = [s for s in nc.sites if s.name in only]
+    blocked = None
+    if any(s.render for s in nc.sites):
+        blocked = nc._browser().blocked       # เก็บ reference ไว้ดูหลังปิดเบราว์เซอร์
+    for s in nc.run_round():
         lat = sorted(s.pop("latency_min"))
         print(s)
         if lat:
             print(f"  latency (นาที): min={lat[0]} median={lat[len(lat) // 2]} max={lat[-1]}")
+
+    per_min = defaultdict(lambda: defaultdict(int))
+    for r in nc.stats.records:
+        per_min[r["domain"]][r["ts"][:16]] += 1
+    for dom, mins in per_min.items():
+        total = sum(mins.values())
+        print(f"{dom}: requests={total}  max/นาที={max(mins.values())}")
+    if blocked:
+        print("blocked by playwright:", dict(blocked))

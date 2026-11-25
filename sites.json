@@ -8,5 +8,33 @@
     "category_segment": 0,
     "title_suffix": " - ข่าวสด",
     "render": false
+  },
+  {
+    "name": "thaipbs",
+    "list_urls": [
+      "https://www.thaipbs.or.th/news/today",
+      "https://www.thaipbs.or.th/news"
+    ],
+    "article_pattern": "/news/content/\\d+$",
+    "id_pattern": "/news/content/(\\d+)$",
+    "title_suffix": "",
+    "content_selector": "#item-description",
+    "content_stop": ["อ่านข่าว"],
+    "category_segment": null,
+    "render": true,
+    "scrolls": 0,
+    "blocked_paths": [
+      "/api-v/",
+      "/thaipbs-api/",
+      "/archive/",
+      "/clip/archive/",
+      "/news/content/content/",
+      "/images",
+      "/assets/",
+      "/royal",
+      "/bbs/",
+      "/search",
+      "/tag"
+    ]
   }
 ]

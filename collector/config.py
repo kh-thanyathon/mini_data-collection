@@ -61,8 +61,11 @@ class NewsSite:
     id_pattern: str                      # regex ดึงเลขข่าวจาก URL (group 1)
     title_suffix: str = ""             # ข้อความท้ายหัวข้อที่ต้องตัด เช่น " - ข่าวสด"
     content_selector: str = ""           # CSS selector ของเนื้อหาข่าว (ว่าง = เดาเอง)
+    content_stop: list[str] = field(default_factory=list)    # เจอย่อหน้านี้แล้วหยุด เช่น "อ่านข่าว"
     category_segment: int | None = None  # path segment ที่เป็นหมวด (ทางสำรอง)
-    render: bool = False                 # True = ใช้ Playwright (บทที่ 7)
+    render: bool = False               # True = ใช้ Playwright โหลดหน้ารายการ
+    scrolls: int = 0                   # จำนวนครั้งที่เลื่อนจอ (infinite scroll)
+    blocked_paths: list[str] = field(default_factory=list)   # path ที่ robots.txt ห้าม
 
 
 def load_sites(path: Path | None = None) -> list[NewsSite]:

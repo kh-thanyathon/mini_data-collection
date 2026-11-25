@@ -23,6 +23,15 @@ class DomainRateLimiter:
             self.sleep(delay)
         return delay
 
+    def charge(self, domain: str, n: int) -> None:
+        """บันทึกว่ามี request เพิ่มอีก n ครั้งที่ไม่ได้ผ่าน wait() (เช่น ไฟล์ JS ที่เบราว์เซอร์โหลดเอง)
+        -> เลื่อนคิวถัดไปออกไปตามจำนวนนั้น ทำให้ภาระรวมต่อนาทียังอยู่ในเพดาน"""
+        if n <= 0:
+            return
+        with self.lock:
+            t = self.clock()
+            self.next_ok[domain] = max(t, self.next_ok[domain]) + n * self.interval
+
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 

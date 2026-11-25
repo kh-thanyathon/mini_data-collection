@@ -153,3 +153,18 @@ def test_category_double_encoded_and_title_suffix():
     r = parse_article(html, "https://n.com/a/news_1", site)
     assert r["category"] == "ข่าวด่วน"
     assert r["title"] == "น้ำมันลดราคา"
+
+def test_content_selector_and_stop_marker():
+    site = NewsSite(name="t", list_urls=[], article_pattern=r"/news/content/\d+$",
+                    id_pattern=r"/news/content/(\d+)$",
+                    content_selector="#item-description", content_stop=["อ่านข่าว"])
+    html = """<html><head><meta property="og:title" content="t">
+    <meta property="article:published_time" content="2026-11-25T10:55:38+07:00"></head><body>
+    <div id="item-description">
+      <p>ย่อหน้าเนื้อข่าวจริงที่ยาวพอจะนับเป็นเนื้อหา</p>
+      <p>อ่านข่าว</p>
+      <p>หลากสีสัน "ลอยกระทง 2569" ทั่วไทย ปล่อยโคมยี่เป็ง</p>
+    </div>
+    <p>ข่าวแนะนำอื่นนอกกล่องเนื้อหาที่ยาวพอสมควร</p></body></html>"""
+    r = parse_article(html, "https://n.com/news/content/1", site)
+    assert r["content"] == "ย่อหน้าเนื้อข่าวจริงที่ยาวพอจะนับเป็นเนื้อหา"
