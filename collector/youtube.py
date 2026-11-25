@@ -73,7 +73,7 @@ def _int(v):
 
 class YouTubeCollector:
     def __init__(self, cfg: YouTubeConfig | None = None, client: HttpClient | None = None,
-                 state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR, log_dir: Path | None = None):
+                 state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR, log_dir: Path | None = None,alerter=None):
         self.seen_comments = SeenStore(state_dir / "yt_seen_comments.json", ttl_days=7)
         self.tracked_path = state_dir / "yt_tracked.json"
         self.tracked: dict[str, str] = load_json(self.tracked_path, {})  # video_id -> published_at
@@ -93,6 +93,7 @@ class YouTubeCollector:
         rounds_per_day = 24 * 60 // self.cfg.interval_minutes
         self.round_budget = self.cfg.daily_quota_budget // rounds_per_day
         self.round_spent = 0
+        self.alerter = alerter                     # None = ไม่แจ้งเตือน (เช่น ใน test)
 
     # ---------- เรียก API ทุกครั้งผ่านตรงนี้ ----------
     def _call(self, endpoint: str, params: dict) -> dict:
@@ -304,14 +305,19 @@ class YouTubeCollector:
         summary.update(quota_this_round=self.round_spent, quota_today=self.quota.used(),
                        pages_skipped_for_budget=self.pages_skipped, latency_min=sorted(lat))
 
-        finish_round("youtube", started, summary, req_stats.records[n0:] if req_stats else [],
-                     self.cfg.interval_minutes, 60, self.log_dir)
+        rlog = finish_round("youtube", started, summary, req_stats.records[n0:] if req_stats else [],
+                            self.cfg.interval_minutes, 60, self.log_dir)
+        if self.alerter:
+            self.alerter.check_round(rlog)
         
         return summary
 
 
 if __name__ == "__main__":
+    from .alerts import Alerter
+    s = YouTubeCollector(alerter=Alerter()).run_round()
     s = YouTubeCollector().run_round()
+
     print({k: v for k, v in s.items() if k != "latency_min"})
     if s["latency_min"]:
         lat = s["latency_min"]

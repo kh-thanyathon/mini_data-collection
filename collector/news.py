@@ -13,7 +13,7 @@ from .storage import SeenStore, append_jsonl, atomic_write_json, load_json, roun
 from .timeutil import LOCAL_TZ, iso, latency_minutes, now, parse_iso
 
 from .roundlog import finish_round
-
+from .alerts import http_status_from_error
 
 MAX_FAILS = 3          # หน้าข่าวที่ parse ไม่ได้ 3 รอบติด -> เลิกลอง
 ARTICLE_TYPES = {"NewsArticle", "Article", "ReportageNewsArticle"}
@@ -261,7 +261,7 @@ class PlaywrightFetcher:
 class NewsCollector:
     def __init__(self, cfg: NewsConfig | None = None, sites: list[NewsSite] | None = None,
                  client: HttpClient | None = None, fetcher=None,
-                 state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR, log_dir: Path | None = None):
+                 state_dir: Path = STATE_DIR, data_dir: Path = DATA_DIR, log_dir: Path | None = None, alerter=None):
         self.cfg = cfg or NewsConfig()
         self.sites = sites if sites is not None else load_sites()
         self.limiter = DomainRateLimiter(self.cfg.max_req_per_min)
@@ -271,6 +271,7 @@ class NewsCollector:
         self.fetcher = fetcher                     # สร้างเมื่อจำเป็นเท่านั้น (เปิดเบราว์เซอร์ใช้ RAM เยอะ)
         self.state_dir, self.data_dir = state_dir, data_dir
         self.log_dir = log_dir or state_dir.parent / "logs"
+        self.alerter = alerter                     # None = ไม่แจ้งเตือน (เช่น ใน test)
 
     def _browser(self):
         if self.fetcher is None:
@@ -362,6 +363,7 @@ class NewsCollector:
                         rec = parse_article(self._browser().fetch(link, site), link, site)
                 except GiveUp as e:
                     summary["errors"].append(str(e)[:200])
+                    summary["listing_error_status"] = http_status_from_error(e)
                     self._fail(aid, fails, seen, summary)
                     continue
                 if not rec["title"] or not rec["published_at"]:
@@ -388,6 +390,7 @@ class NewsCollector:
                         summary["latency_min"].append(round(lat, 1))
         except GiveUp as e:
             summary["errors"].append(f"listing: {e}"[:200])
+            summary["listing_error_status"] = http_status_from_error(e)
         finally:
             seen.save()
             atomic_write_json(fails_path, fails)
@@ -395,9 +398,12 @@ class NewsCollector:
             atomic_write_json(first_seen_path, {k: v for k, v in first_seen.items() if k not in seen})
 
         summary["duration_s"] = round((now() - started).total_seconds(), 1)
-        finish_round(f"news/{site.name}", started, summary, self.stats.records[n0:],
-                     self.cfg.interval_minutes, 15, self.log_dir)
+        rlog = finish_round(f"news/{site.name}", started, summary, self.stats.records[n0:],
+                    self.cfg.interval_minutes, 15, self.log_dir)
+        if self.alerter:
+            self.alerter.check_round(rlog)
         return summary
+        
 
     
     def _fail(self, aid: str, fails: dict, seen: SeenStore, summary: dict) -> None:
@@ -425,10 +431,14 @@ if __name__ == "__main__":
     import sys
     from collections import defaultdict
 
-    nc = NewsCollector()
+    from .alerts import Alerter
+
+    nc = NewsCollector(alerter=Alerter())
     only = sys.argv[1:]                       # python -m collector.news thaipbs  (รันเฉพาะเว็บ)
     if only:
         nc.sites = [s for s in nc.sites if s.name in only]
+        if not nc.sites:
+            sys.exit(f"ไม่พบเว็บชื่อ {only} ใน sites.json")
     blocked = None
     if any(s.render for s in nc.sites):
         blocked = nc._browser().blocked       # เก็บ reference ไว้ดูหลังปิดเบราว์เซอร์

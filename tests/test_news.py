@@ -194,3 +194,16 @@ def test_first_seen_at_recorded_even_if_collected_later(tmp_path):
     assert first["first_seen_at"] <= first["collected_at"]
     # ข่าวที่ 2 ถูกเห็นตั้งแต่รอบแรก แต่เก็บได้รอบสอง -> first_seen_at คือเวลาของรอบแรก
     assert second["first_seen_at"] <= first["collected_at"] <= second["collected_at"]
+
+def test_alerter_is_called_with_round_log(tmp_path):
+    calls = []
+
+    class SpyAlerter:
+        def check_round(self, rlog):
+            calls.append(rlog)
+
+    fake = FakeSite()
+    nc = NewsCollector(NewsConfig(), [SITE], fake, state_dir=tmp_path / "s",
+                       data_dir=tmp_path / "d", alerter=SpyAlerter())
+    nc.run_site(SITE)
+    assert len(calls) == 1 and calls[0]["source"] == "news/t"
