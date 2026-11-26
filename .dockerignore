@@ -10,3 +10,4 @@ __pycache__/
 .pytest_cache/
 try_*.py
 dev-backup/
+run-24h/
