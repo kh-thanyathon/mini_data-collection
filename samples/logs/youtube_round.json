@@ -1,0 +1,39 @@
+{
+ "source": "youtube",
+ "round_id": "2026-11-25_203402301_40908",
+ "started_at": "2026-11-25T20:34:02+07:00",
+ "ended_at": "2026-11-25T20:35:17+07:00",
+ "duration_s": 75.1,
+ "interval_s": 3600,
+ "duration_ok": true,
+ "items": {
+  "new_videos": 145,
+  "videos": 145,
+  "comments_new": 192,
+  "comments_disabled": 3,
+  "quota_this_round": 323,
+  "quota_today": 323,
+  "pages_skipped_for_budget": 1
+ },
+ "requests": {
+  "total": 26,
+  "success_rate": 1.0,
+  "per_domain": {
+   "www.googleapis.com": {
+    "requests": 26,
+    "success_rate": 1.0,
+    "max_per_min": 20,
+    "avg_per_active_min": 13.0
+   }
+  }
+ },
+ "freshness": {
+  "n": 145,
+  "median_min": 59.9,
+  "p95_min": 109.8,
+  "max_min": 146.6,
+  "pct_within_target": 51.0,
+  "target_min": 60
+ },
+ "errors": []
+}

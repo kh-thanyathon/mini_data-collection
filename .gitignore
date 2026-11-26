@@ -3,10 +3,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-data/
-state/
-logs/
-reports/
+/data/
+/state/
+/logs/
+/reports/
 try_*.py
-dev-backup/
-run-24h/
+/dev-backup/
+/run-24h/

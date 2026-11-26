@@ -1,0 +1,34 @@
+{
+ "source": "news/thaipbs",
+ "round_id": "2026-11-25_203402304_40908",
+ "started_at": "2026-11-25T20:34:02+07:00",
+ "ended_at": "2026-11-25T20:37:48+07:00",
+ "duration_s": 226.0,
+ "interval_s": 300,
+ "duration_ok": true,
+ "items": {
+  "listing_links": 54,
+  "listing_not_modified": 0,
+  "new_links": 54,
+  "saved": 40,
+  "backfill": 40,
+  "failed": 0
+ },
+ "requests": {
+  "total": 45,
+  "success_rate": 1.0,
+  "per_domain": {
+   "www.thaipbs.or.th": {
+    "requests": 45,
+    "success_rate": 1.0,
+    "max_per_min": 12,
+    "avg_per_active_min": 11.2
+   }
+  }
+ },
+ "freshness": {
+  "n": 0,
+  "target_min": 15
+ },
+ "errors": []
+}
